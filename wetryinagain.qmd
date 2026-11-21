@@ -1,0 +1,511 @@
+---
+title: "wetryinagain"
+format: html
+editor: visual
+---
+
+## start
+
+setting directory
+
+```{r}
+knitr::opts_knit$set(
+  root.dir = "C:/Users/u1482863/OneDrive - University of Utah/EVIE_GSL"
+)
+
+
+library(sensitivity)
+
+packageVersion("sensitivity")
+```
+
+cheat: find file directory and set your wd to the same folder that your code is in so that it can look for the master list.
+
+```{r}
+
+list.files()
+file.exists("GSL_Data_SON.xlsx")
+
+setwd("C:/Users/u1482863/OneDrive - University of Utah/EVIE_GSL")
+```
+
+Lake Balance Functions
+
+```{r}
+# lake_balance_functions.R
+# R translation of lake_balance_functions.py
+# Keep this file in the same folder as the analysis scripts.
+
+isotope_evap <- function(h, ep_k, ep_eq, alfa, dX_A, dX_L) {
+  ((dX_L - ep_eq) / alfa - h * dX_A - ep_k) / (1 - h + 0.001 * ep_k)
+}
+
+isotope_atm <- function(precip, ep_eq, k) {
+  (precip - k * ep_eq) / (1 + 0.001 * k * ep_eq)
+}
+
+mass_balance_ss2 <- function(h, ep_k, ep_eq, alfa, dX_A, dX_S, dX_I) {
+  a <- (h * dX_A + ep_k + ep_eq / alfa) / (1 - h + 0.001 * ep_k)
+  b <- (h - 0.001 * (ep_k + ep_eq / alfa)) / (1 - h + 0.001 * ep_k)
+  x <- (dX_S - dX_I) / (a - b * dX_S)
+  dX_LS <- (x * a + dX_I) / (1 + b * x)
+  c(dX_LS = dX_LS, x = x, a = a, b = b)
+}
+
+E_I <- function(h, ep_k, ep_eq, alfa, dX_A, dX_S, dX_I) {
+  a <- (h * dX_A + ep_k + ep_eq / alfa) / (1 - h + 0.001 * ep_k)
+  b <- (h - 0.001 * (ep_k + ep_eq / alfa)) / (1 - h + 0.001 * ep_k)
+  (dX_S - dX_I) / (a - b * dX_S)
+}
+
+mass_balance_ssx <- function(h, ep_k, ep_eq, alfa, dX_A, dX_I, x) {
+  a <- (h * dX_A + ep_k + ep_eq / alfa) / (1 - h + 0.001 * ep_k)
+  b <- (h - 0.001 * (ep_k + ep_eq / alfa)) / (1 - h + 0.001 * ep_k)
+  dX_LS <- (x * a + dX_I) / (1 + b * x)
+  c(dX_LS = dX_LS, limit = a / b)
+}
+
+hydro_balance <- function(vars, dX_S_O, dX_S_D, dX_A_O, dX_A_D,
+                          f_inlet, f_creek, f_precip, f_outlet,
+                          alfa_O, ep_eq_O, alfa_D, ep_eq_D) {
+  dX_inlet_O <- -16.5680552351257 #oxygen isotope of inlet
+  dX_creek_O <- -16.6427693908244 #oxygen isotope of creek
+  dX_precip_O <- -14.5993690452293 #oxygen isotoep of precip
+  dX_gwater_O <- -17.7983116883116 #oxygen isotope of groundwater
+  dX_inlet_D <- -125.869415352418 #hydrogen isotope
+  dX_creek_D <- -126.203603690239 #hydrogen 
+  dX_precip_D <- -105.704124214273 #hydrogen
+  dX_gwater_D <- -135.735649350649 #hydrogen 
+  f_gwater <- vars[1]; f_evap <- vars[2]; x_ <- vars[3] #this is fraction groundwater, evaporation, and i don't x_ is 
+  h <- vars[4]; dX_I_O <- vars[5]; dX_I_D <- vars[6]
+  eq1 <- f_inlet + f_creek + f_precip + f_gwater - f_outlet - f_evap # mass balance - for our code we will need to change b/c f_weber, f_bear, f_jordan and no outlet
+  eq2 <- x_ * (f_inlet + f_creek + f_gwater + f_precip) - f_evap 
+  eq3 <- (dX_inlet_O*f_inlet + dX_creek_O*f_creek + dX_precip_O*f_precip +
+            dX_gwater_O*f_gwater)/(f_inlet + f_creek + f_precip + f_gwater) - dX_I_O
+  eq4 <- (dX_inlet_D*f_inlet + dX_creek_D*f_creek + dX_precip_D*f_precip +
+            dX_gwater_D*f_gwater)/(f_inlet + f_creek + f_precip + f_gwater) - dX_I_D
+  ep_k_O <- 14.2 * (1-h); ep_k_D <- 12.5 * (1-h) 
+  eq5 <- ((dX_S_O-dX_I_O)*(1-h+0.001*ep_k_O)) /
+    (h*(dX_A_O-dX_S_O)+(ep_k_O+ep_eq_O/alfa_O)*(0.001*dX_S_O+1)) - x_
+  eq6 <- ((dX_S_D-dX_I_D)*(1-h+0.001*ep_k_D)) /
+    (h*(dX_A_D-dX_S_D)+(ep_k_D+ep_eq_D/alfa_D)*(0.001*dX_S_D+1)) - x_
+  c(eq1, eq2, eq3, eq4, eq5, eq6)
+}
+
+calc_x <- function(vars, dX_S_O, dX_I_O, dX_P_O, h, temp_) {
+  x_ <- vars[1]
+  alfa_O <- fractionation_factor_d18O(temp_)
+  ep_eq_O <- (alfa_O - 1) * 1000
+  ep_k_O <- 14.2 * (1-h)
+  dX_A_O <- isotope_atm(dX_P_O, ep_eq_O, 1)
+  ((dX_S_O-dX_I_O)*(1-h+0.001*ep_k_O)) /
+    (h*(dX_A_O-dX_S_O)+(ep_k_O+ep_eq_O/alfa_O)*(0.001*dX_S_O+1)) - x_
+}
+
+fractionation_factor_d18O <- function(temp) {
+  exp(-7.685/1000 + 6.7123/(273.15+temp) -
+        1666.4/(273.15+temp)^2 + 350410/(273.15+temp)^3)
+}
+fractionation_factor_dD <- function(temp) {
+  exp(1158.8*(273.15+temp)^3/1e12 -
+        1620.1*(273.15+temp)^2/1e9 +
+        794.84*(273.15+temp)/1e6 - 161.04/1000 +
+        2999200/(273.15+temp)^3)
+}
+kinetic_en_d18O <- function(humidity) 14.2 * (1-humidity)
+kinetic_en_dD <- function(humidity) 12.5 * (1-humidity)
+
+print_results_calcs1 <- function(iso, hum, temp, ep, ep_k, alpha, ds, dX_A, dX_E, xs) {
+  cat("Inputs to model:\nIsotope:", iso, "\nHumidity:", hum,
+      "\nTemperature (deg C):", temp, "\nEq. enrichment factor:", ep,
+      "\nKinetic enrichment factor:", ep_k, "\nEq. fractionation factor:", alpha,
+      "\nIsotope - atmosphere:", dX_A,
+      "\nIsotope - lake, steady-state (available lake data):", ds[2],
+      "\nIsotope - inflow:", ds[1], "\n\nOutput:\nIsotope - evaporation (calculated):",
+      dX_E, "\nX:", xs, "\n")
+}
+print_stats <- function(label, x) {
+  cat("\n", label, " output:\n", "mean output:\t", mean(x, na.rm=TRUE),
+      "\nmedian output:\t", median(x, na.rm=TRUE),
+      "\nstdev output:\t", sd(x, na.rm=TRUE) * sqrt((length(x)-1)/length(x)),
+      "\n15.9 perc output:\t", unname(quantile(x, .159, na.rm=TRUE)),
+      "\n84.1 perc output:\t", unname(quantile(x, .841, na.rm=TRUE)),
+      "\nminimum output:\t", min(x, na.rm=TRUE),
+      "\nmaximum output:\t", max(x, na.rm=TRUE), "\n", sep="")
+}
+print_results_unc <- function(iso, sim, x_dist, dX_E_dist, dX_A_dist, E_dist) {
+  cat("Isotope:\t", iso, "\nNumber of simulations:\t", sim, "\n", sep="")
+  print_stats("X", x_dist); print_stats("dX_E", dX_E_dist)
+  print_stats("dX_A", dX_A_dist); print_stats("E", E_dist)
+}
+
+
+```
+
+Lake Mass Balance 1
+
+```{r}
+# custado_et_al_2024_bear_lake_mass_balance_1.R
+#source("lake_balance_functions.R")
+
+iso <- "dD" # choose "dD" or "d18O"
+temp <- 13.4062277
+hum <- 0.506422041
+influx_O <- -103.8292884; lake_O <- -7.288912049; precip_O <- -13.09830671
+influx_D <- -12.85262925; lake_D <- -77.74534294; precip_D <- -98.34952744
+
+alpha_O <- fractionation_factor_d18O(temp); alpha_D <- fractionation_factor_dD(temp)
+ep_O <- (alpha_O-1)*1000; ep_D <- (alpha_D-1)*1000
+ep_k_O <- kinetic_en_d18O(hum); ep_k_D <- kinetic_en_dD(hum)
+atm_O <- isotope_atm(precip_O, ep_O, 1); atm_D <- isotope_atm(precip_D, ep_D, 1)
+evap_O <- isotope_evap(hum, ep_k_O, ep_O, alpha_O, atm_O, lake_O)
+evap_D <- isotope_evap(hum, ep_k_D, ep_D, alpha_D, atm_D, lake_D)
+
+if (iso == "d18O") {
+  ds <- c(influx_O, lake_O, precip_O, ep_k_O, ep_O, alpha_O, atm_O, evap_O)
+} else {
+  ds <- c(influx_D, lake_D, precip_D, ep_k_D, ep_D, alpha_D, atm_D, evap_D)
+}
+influx <- ds[1]; lake <- ds[2]; precip <- ds[3]; ep_k <- ds[4]
+ep <- ds[5]; alpha <- ds[6]; atm <- ds[7]; evap <- ds[8]
+result <- mass_balance_ss2(hum, ep_k, ep, alpha, atm, lake, influx)
+dX_LS <- result["dX_LS"]; xs <- result["x"]; a <- result["a"]; b <- result["b"]
+print_results_calcs1(iso, hum, temp, ep, ep_k, alpha, ds, atm, evap, xs)
+
+```
+
+Lake Mass Balance 2
+
+```{r}
+# custado_et_al_2024_bear_lake_mass_balance_2.R
+# Requires package nleqslv: install.packages("nleqslv")
+source("lake_balance_functions.R")
+if (!requireNamespace("nleqslv", quietly=TRUE)) stop("Install package 'nleqslv' first.")
+
+iso <- "dD"
+temp <- 13.4062277; hum <- 0.50642201
+influx_O <- -12.85262925; lake_O <- -7.288912049; precip_O <- -13.09830671
+influx_D <- -103.8292884; lake_D <- -77.74534294; precip_D <- -98.34952744
+alpha_O <- fractionation_factor_d18O(temp); alpha_D <- fractionation_factor_dD(temp)
+ep_O <- (alpha_O-1)*1000; ep_D <- (alpha_D-1)*1000
+ep_k_O <- kinetic_en_d18O(hum); ep_k_D <- kinetic_en_dD(hum)
+atm_O <- isotope_atm(precip_O, ep_O, 1); atm_D <- isotope_atm(precip_D, ep_D, 1)
+evap_O <- isotope_evap(hum, ep_k_O, ep_O, alpha_O, atm_O, lake_O)
+evap_D <- isotope_evap(hum, ep_k_D, ep_D, alpha_D, atm_D, lake_D)
+f_inlet2 <- 317867056.26687
+f_creek2 <- 145049044.909472
+f_precip2 <- 107856450.331302
+f_outlet2 <- 352639058.615613
+initial_guesses <- c(0, 231211349.583575, 0.435, 0.76, -16.2150279446561, -122.143792918018)
+hydro_fn <- function(v) hydro_balance(v, lake_O, lake_D, atm_O, atm_D,
+                                      f_inlet2, f_creek2, f_precip2, f_outlet2, alpha_O, ep_O, alpha_D, ep_D)
+fit <- nleqslv::nleqslv(initial_guesses, hydro_fn, method="Newton")
+roots <- fit$x
+names(roots) <- c("f_gwater_soln","f_evap_soln","x_soln","h_soln","dX_I_O_soln","dX_I_D_soln")
+print(roots)
+cat("\nKnown discharge values (m3/yr):\n")
+print(c(f_inlet=f_inlet2, f_creek=f_creek2, f_precip=f_precip2, f_outlet=f_outlet2))
+if (fit$termcd != 1) warning("Solver did not report normal convergence; inspect fit and residuals.")
+print(hydro_fn(roots))
+```
+
+Sensitivity Individual
+
+```{r}
+# custado_et_al_2024_sensitivity_individual.R
+source("lake_balance_functions.R")
+iso <- "d18O" # choose "dD" or "d18O"
+hum <- 0.506422041; temp <- 13.4062277
+precip_O <- -13.09830671; precip_D <- -93.34952744
+alfa_O <- fractionation_factor_d18O(temp); ep_eq_O <- (alfa_O-1)*1000
+ep_k_O <- kinetic_en_d18O(hum); alfa_D <- fractionation_factor_dD(temp)
+ep_eq_D <- (alfa_D-1)*1000; ep_k_D <- kinetic_en_dD(hum)
+k_O <- 1; dX_A_O <- isotope_atm(precip_O,ep_eq_O,k_O)
+dX_S_O <- -8.75978345841666; dX_I_O <- -16.2152393388515; dX_P_O <- -11.70
+k_D <- 1; dX_A_D <- isotope_atm(precip_D,ep_eq_D,k_D)
+dX_S_D <- -86.4422222222222; dX_I_D <- -122.145607652468; dX_P_D <- -84.02
+if (iso=="d18O") {
+  frac_in <- c(alfa_O,ep_eq_O,ep_k_O); iso_in <- c(k_O,dX_A_O,dX_S_O,dX_I_O,dX_P_O)
+} else {
+  frac_in <- c(alfa_D,ep_eq_D,ep_k_D); iso_in <- c(k_D,dX_A_D,dX_S_D,dX_I_D,dX_P_D)
+}
+set.seed(123)
+sim <- 100000
+# Humidity sensitivity
+hum_dist <- runif(sim,0.5,1)
+x_dist <- vapply(hum_dist,function(h) E_I(h,frac_in[3],frac_in[2],frac_in[1],
+                                          iso_in[2],iso_in[3],iso_in[4]),numeric(1))
+plot(x_dist,hum_dist,pch=16,cex=.3,xlab="Output: X (Evaporation/Inflow)",
+     ylab="Input: Humidity",main=paste(iso,"Input: humidity Output: X"))
+par(new=TRUE)
+hist(x_dist,breaks=50,probability=TRUE,axes=FALSE,xlab="",ylab="",col=rgb(.5,.5,.5,.4),border=NA)
+axis(4); mtext("Probability density",side=4,line=3)
+# Atmospheric isotope sensitivity by varying precipitation isotope value
+precip_in <- runif(sim,iso_in[5]*1.2,iso_in[5]*0.8)
+dX_A_dist <- isotope_atm(precip_in,frac_in[2],1)
+x_dist2 <- vapply(dX_A_dist,function(a) E_I(hum,frac_in[3],frac_in[2],frac_in[1],
+                                            a,iso_in[3],iso_in[4]),numeric(1))
+plot(x_dist2,dX_A_dist,pch=16,cex=.3,xlab="Output: X (Evaporation/Inflow)",
+     ylab=expression(delta[A]),main=paste(iso,"Input: atmospheric isotope Output: X"))
+par(new=TRUE)
+hist(x_dist2,breaks=50,probability=TRUE,axes=FALSE,xlab="",ylab="",col=rgb(.5,.5,.5,.4),border=NA)
+axis(4); mtext("Probability density",side=4,line=3)
+```
+
+Sensitivity Sobol
+
+```{r}
+# custado_et_al_2024_sensitivity_sobol.R
+# Uses the sensitivity package; install.packages("sensitivity")
+source("lake_balance_functions.R")
+if (!requireNamespace("sensitivity", quietly=TRUE)) stop("Install package 'sensitivity' first.")
+iso <- "dD"
+hum <- 0.506422041; temp <- 13.4062277
+k_O <- 1; dX_P_O <- -11.70; dX_S_O <- -8.75978345841666; dX_I_O <- -16.2152393388515
+k_D <- 1; dX_P_D <- -84.02; dX_S_D <- -86.4422222222222; dX_I_D <- -122.145607652468
+hum_unc <- hum*0.05; temp_unc <- 0.2
+dX_P_O_unc <- abs(dX_P_O*0.003); dX_S_O_unc <- 0.1; dX_I_O_unc <- 0.0454711273463026
+dX_P_D_unc <- abs(dX_P_D*0.01); dX_S_D_unc <- 0.5; dX_I_D_unc <- 0.338982073484539
+iso_O <- c(k_O,dX_S_O,dX_I_O,dX_P_O); iso_D <- c(k_D,dX_S_D,dX_I_D,dX_P_D)
+unc_O <- c(hum_unc,temp_unc,dX_P_O_unc,dX_S_O_unc,dX_I_O_unc)
+unc_D <- c(hum_unc,temp_unc,dX_P_D_unc,dX_S_D_unc,dX_I_D_unc)
+if (iso=="d18O") { iso_in <- iso_O; unc_in <- unc_O } else { iso_in <- iso_D; unc_in <- unc_D }
+bounds <- rbind(c(hum-hum_unc,hum+hum_unc), c(temp-temp_unc,temp+temp_unc),
+                c(iso_in[4]-unc_in[3],iso_in[4]+unc_in[3]),
+                c(iso_in[2]-unc_in[4],iso_in[2]+unc_in[4]),
+                c(iso_in[3]-unc_in[5],iso_in[3]+unc_in[5]))
+set.seed(123)
+N <- 1024
+# Independent base samples A and B; rows are simulations, columns are inputs.
+A <- matrix(runif(N*5), nrow=N, ncol=5)
+B <- matrix(runif(N*5), nrow=N, ncol=5)
+colnames(A) <- colnames(B) <- c("hum","temp","dX_P","dX_S","dX_I")
+for (j in seq_len(5)) {
+  A[,j] <- bounds[j,1] + A[,j]*(bounds[j,2]-bounds[j,1])
+  B[,j] <- bounds[j,1] + B[,j]*(bounds[j,2]-bounds[j,1])
+}
+model_fun <- function(v) {
+  alfa <- fractionation_factor_d18O(v[2]); ep_eq <- (alfa-1)*1000
+  ep_k <- kinetic_en_d18O(v[1]); dX_A <- isotope_atm(v[3],ep_eq,iso_in[1])
+  E_I(v[1],ep_k,ep_eq,alfa,dX_A,v[4],v[5])
+}
+YA <- apply(A,1,model_fun); YB <- apply(B,1,model_fun)
+YAB <- lapply(seq_len(ncol(A)), function(j) {
+  M <- A; M[,j] <- B[,j]; apply(M,1,model_fun)
+})
+VY <- var(c(YA,YB))
+S1 <- vapply(seq_len(ncol(A)), function(j) mean(YB*(YAB[[j]]-YA))/VY, numeric(1))
+ST <- vapply(seq_len(ncol(A)), function(j) mean((YA-YAB[[j]])^2)/(2*VY), numeric(1))
+results <- data.frame(parameter=colnames(A), S1=S1, ST=ST)
+print(results)
+barplot(rbind(S1,ST), beside=TRUE, names.arg=colnames(A),
+        ylab="Sobol index", legend.text=c("First order (S1)","Total order (ST)"))
+```
+
+Uncertainty
+
+```{r}
+# custado_et_al_2024_uncertainty.R
+source("lake_balance_functions.R")
+iso <- "dD" # choose "dD" or "d18O"
+hum <- 0.506422041; temp <- 13.4062277
+k_O <- 1; dX_P_O <- -11.70; dX_S_O <- -8.75978345841666; dX_I_O <- -16.2152393388515
+k_D <- 1; dX_P_D <- -84.02; dX_S_D <- -86.4422222222222; dX_I_D <- -122.145607652468
+hum_unc <- hum*0.05; temp_unc <- 0.2
+dX_P_O_unc <- abs(dX_P_O*0.003); dX_S_O_unc <- 0.1; dX_I_O_unc <- 0.0454711273463026
+dX_P_D_unc <- abs(dX_P_D*0.01); dX_S_D_unc <- 0.5; dX_I_D_unc <- 0.338982073484539
+iso_O <- c(k_O,dX_S_O,dX_I_O,dX_P_O); iso_D <- c(k_D,dX_S_D,dX_I_D,dX_P_D)
+unc_O <- c(hum_unc,temp_unc,dX_P_O_unc,dX_S_O_unc,dX_I_O_unc)
+unc_D <- c(hum_unc,temp_unc,dX_P_D_unc,dX_S_D_unc,dX_I_D_unc)
+if (iso == "d18O") { iso_in <- iso_O; unc_in <- unc_O } else { iso_in <- iso_D; unc_in <- unc_D }
+sim <- 100000
+set.seed(123) # remove or change this line to use a different random sample
+hum_dist <- runif(sim, hum-unc_in[1], hum+unc_in[1])
+temp_dist <- runif(sim, temp-unc_in[2], temp+unc_in[2])
+dX_P_dist <- runif(sim, iso_in[4]-unc_in[3], iso_in[4]+unc_in[3])
+dX_S_dist <- runif(sim, iso_in[2]-unc_in[4], iso_in[2]+unc_in[4])
+dX_I_dist <- runif(sim, iso_in[3]-unc_in[5], iso_in[3]+unc_in[5])
+x_dist <- dX_E_dist <- dX_A_dist <- E_dist <- numeric(sim)
+for (ind in seq_len(sim)) {
+  alfa <- fractionation_factor_d18O(temp_dist[ind])
+  ep_eq <- (alfa-1)*1000
+  ep_k <- kinetic_en_d18O(hum_dist[ind])
+  dX_A <- isotope_atm(dX_P_dist[ind], ep_eq, iso_in[1])
+  dX_A_dist[ind] <- dX_A
+  dX_E_dist[ind] <- isotope_evap(hum_dist[ind], ep_k, ep_eq, alfa, dX_A, dX_S_dist[ind])
+  x_dist[ind] <- E_I(hum_dist[ind], ep_k, ep_eq, alfa, dX_A, dX_S_dist[ind], dX_I_dist[ind])
+  E_dist[ind] <- x_dist[ind]*570772551.507645
+}
+print_results_unc(iso, sim, x_dist, dX_E_dist, dX_A_dist, E_dist)
+
+```
+
+Climate Scenarios
+
+```{r}
+# custado_et_al_2024_bear_lake_mass_balance_2.R
+# Requires package nleqslv: install.packages("nleqslv")
+source("lake_balance_functions.R")
+if (!requireNamespace("nleqslv", quietly=TRUE)) stop("Install package 'nleqslv' first.")
+
+iso <- "dD"
+temp <- 13.4062277; hum <- 0.506422041
+influx_O <- -12.85262925; lake_O <- -7.288912049; precip_O <- -13.09830671
+influx_D <- -103.8292884; lake_D <- -77.74534294; precip_D <- -98.34952744
+alpha_O <- fractionation_factor_d18O(temp); alpha_D <- fractionation_factor_dD(temp)
+ep_O <- (alpha_O-1)*1000; ep_D <- (alpha_D-1)*1000
+ep_k_O <- kinetic_en_d18O(hum); ep_k_D <- kinetic_en_dD(hum)
+atm_O <- isotope_atm(precip_O, ep_O, 1); atm_D <- isotope_atm(precip_D, ep_D, 1)
+evap_O <- isotope_evap(hum, ep_k_O, ep_O, alpha_O, atm_O, lake_O)
+evap_D <- isotope_evap(hum, ep_k_D, ep_D, alpha_D, atm_D, lake_D)
+f_inlet2 <- 317867056.26687
+f_creek2 <- 145049044.909472
+f_precip2 <- 107856450.331302
+f_outlet2 <- 352639058.615613
+initial_guesses <- c(0, 231211349.583575, 0.435, 0.76, -16.2150279446561, -122.143792918018)
+hydro_fn <- function(v) hydro_balance(v, lake_O, lake_D, atm_O, atm_D,
+                                      f_inlet2, f_creek2, f_precip2, f_outlet2, alpha_O, ep_O, alpha_D, ep_D)
+fit <- nleqslv::nleqslv(initial_guesses, hydro_fn, method="Newton")
+roots <- fit$x
+names(roots) <- c("f_gwater_soln","f_evap_soln","x_soln","h_soln","dX_I_O_soln","dX_I_D_soln")
+print(roots)
+cat("\nKnown discharge values (m3/yr):\n")
+print(c(f_inlet=f_inlet2, f_creek=f_creek2, f_precip=f_precip2, f_outlet=f_outlet2))
+if (fit$termcd != 1) warning("Solver did not report normal convergence; inspect fit and residuals.")
+print(hydro_fn(roots))
+
+```
+
+practice
+
+```{r}
+getwd()
+
+file.exists("excel sheets/GSL_master_list.xlsx")
+```
+
+Plots (Custado)
+
+```{r}
+# custado_et_al_2024_plots.R
+# Figures 1, 4, 5 and 7 from the Python source.
+# Figure 1 needs the three external shapefiles; set their paths below if available.
+source("lake_balance_functions.R")
+if (!requireNamespace("ggplot2", quietly=TRUE)) install.packages("ggplot2")
+library(ggplot2)
+
+
+
+library(readxl)
+
+# Import the GSL master list
+bl <- read_excel(
+  "C:/Users/u1482863/OneDrive - University of Utah/EVIE_GSL/Codes/My Codes/GSL_master_list.xlsx"
+)
+
+# Convert collection dates
+bl$Sample_Collection_Date <- as.Date(bl$Sample_Collection_Date)
+
+# Preview the data
+head(bl)
+
+
+
+#library(readxl)
+#GSL_master_list <- read_excel("GSL_master_list.xlsx")
+
+#bl <- read.xlsx("GSL_master_list.xlsx", stringsAsFactors=FALSE)
+
+#bl$Sample_Collection_Date <- as.Date(bl$Sample_Collection_Date)
+#stations_used <- read.csv("stations_used.csv", stringsAsFactors=FALSE)
+
+# Figure 1: sample map. External shapefiles were referenced in the original Python
+# script but were NOT included in the uploaded ZIP. Supply local paths to use them.
+lake_shp <- "PATH_TO_clipped_bear_lake.shp"
+rivers_shp <- "PATH_TO_lakes_and_rivers.shp"
+basin_shp <- "PATH_TO_WBDHU12.shp"
+if (all(file.exists(c(lake_shp,rivers_shp,basin_shp))) &&
+    requireNamespace("sf",quietly=TRUE)) {
+  library(sf)
+  lake_sf <- st_read(lake_shp,quiet=TRUE)
+  rivers <- st_transform(st_read(rivers_shp,quiet=TRUE),4326)
+  basin <- st_read(basin_shp,quiet=TRUE)
+  rivers_bear <- rivers[grepl("Bear",rivers$NAMEEN,ignore.case=TRUE),]
+  bear_basin <- basin[basin$name=="Bear Lake",]
+  p1 <- ggplot() + geom_sf(data=lake_sf,fill="grey90",colour="black",alpha=.3) +
+    geom_sf(data=rivers_bear,colour="#86BBD8") +
+    geom_sf(data=bear_basin,fill="#86BBD8",colour="black",linewidth=1) +
+    geom_point(data=subset(bl,Type=="Snow_pit"),aes(Lon,Lat,colour="Snow pit"),size=3) +
+    geom_point(data=subset(bl,Type %in% c("Ground","Spring")),aes(Lon,Lat,colour="Ground and spring"),size=3) +
+    geom_point(data=subset(bl,Type=="Canal"),aes(Lon,Lat,colour="Canal"),size=3) +
+    geom_point(data=subset(bl,Type=="River_or_stream"),aes(Lon,Lat,colour="River/stream"),size=3) +
+    geom_point(data=subset(bl,Type=="Lake"),aes(Lon,Lat,colour="Lake"),shape=18,size=3) +
+    geom_point(data=subset(bl,Type=="Precipitation"),aes(Lon,Lat,colour="Precipitation"),size=3) +
+    geom_point(data=subset(bl,Data_source=="Project"),aes(Lon,Lat,colour="2022/2023 Sampling"),size=1.5) +
+    geom_point(data=head(stations_used,15),aes(Lon,Lat,shape="USGS/EPA Gauges"),colour="gold",size=3) +
+    coord_sf(xlim=c(-112.5,-110.5),ylim=c(40.5,43)) + theme_bw(base_size=14) +
+    labs(x="Longitude",y="Latitude",colour="Sample type",shape=NULL)
+  print(p1)
+} else {
+  message("Figure 1 map skipped: update the three shapefile paths and ensure package 'sf' is installed.")
+}
+
+# Figure 4: all isotope data vs Global Meteoric Water Line (GMWL)
+p4 <- ggplot() + geom_abline(intercept=10,slope=8,colour="black") +
+  geom_point(data=subset(bl,Subgroup=="Out"),aes(d18O,dD,colour="Out",shape="Out"),size=3) +
+  geom_point(data=subset(bl,Subgroup=="Downstream"),aes(d18O,dD,colour="Downstream",shape="Downstream"),size=2.5) +
+  geom_point(data=subset(bl,Subgroup=="Upstream"),aes(d18O,dD,colour="Upstream",shape="Upstream"),size=2.5) +
+  geom_point(data=subset(bl,Subgroup=="Around"),aes(d18O,dD,colour="Data around lake",shape="Data around lake"),size=2) +
+  labs(x=expression(delta^{18}*O~("\u2030")),y=expression(delta^{2}*H~("\u2030")),colour=NULL,shape=NULL) +
+  theme_bw(base_size=16)
+print(p4)
+
+# Figure 5: theoretical lake isotope compositions across X and humidity
+temp <- 13.4062277; hum <- .506422041
+influx_O <- -12.85262925; lake_O <- -7.288912049; precip_O <- -13.09830671
+influx_D <- -103.8292884; lake_D <- -77.74534294; precip_D <- -98.34952744
+alpha_O <- fractionation_factor_d18O(temp); alpha_D <- fractionation_factor_dD(temp)
+ep_O <- (alpha_O-1)*1000; ep_D <- (alpha_D-1)*1000
+ep_k_O <- kinetic_en_d18O(hum); ep_k_D <- kinetic_en_dD(hum)
+atm_O <- isotope_atm(precip_O,ep_O,1); atm_D <- isotope_atm(precip_D,ep_D,1)
+x_O <- .495087888113281; x_D <- .368869387932284
+x_arr <- seq(0,1,by=.1); humidity <- c(0,.2,.4,.6,.76,.95)
+cur_O <- mass_balance_ssx(hum,ep_k_O,ep_O,alpha_O,atm_O,influx_O,x_O)
+cur_D <- mass_balance_ssx(hum,ep_k_D,ep_D,alpha_D,atm_D,influx_D,x_D)
+cur <- data.frame(d18O=cur_O[1],dD=cur_D[1],type="Current lake isotopic composition")
+lim <- data.frame(d18O=cur_O[2],dD=cur_D[2],type="Theoretical maximum enrichment")
+curves <- do.call(rbind,lapply(humidity,function(hh) {
+  ko <- kinetic_en_d18O(hh); kd <- kinetic_en_dD(hh)
+  oo <- vapply(x_arr,function(xx) mass_balance_ssx(hh,ko,ep_O,alpha_O,atm_O,influx_O,xx)[1],numeric(1))
+  dd <- vapply(x_arr,function(xx) mass_balance_ssx(hh,kd,ep_D,alpha_D,atm_D,influx_D,xx)[1],numeric(1))
+  data.frame(d18O=oo,dD=dd,humidity=factor(hh))
+}))
+p5 <- ggplot(curves,aes(d18O,dD,group=humidity)) + geom_line(colour="grey50") +
+  geom_abline(intercept=10,slope=8,colour="black") +
+  geom_point(data=subset(bl,Subgroup=="Around"),aes(d18O,dD),inherit.aes=FALSE,
+             shape=21,fill="white",colour="black") +
+  geom_point(data=cur,aes(d18O,dD,colour=type,shape=type),inherit.aes=FALSE,size=4) +
+  geom_point(data=lim,aes(d18O,dD,colour=type,shape=type),inherit.aes=FALSE,size=4) +
+  labs(x=expression(delta^{18}*O~("\u2030")),y=expression(delta^{2}*H~("\u2030")),colour=NULL,shape=NULL) +
+  theme_bw(base_size=14)
+print(p5)
+
+# Figure 7: mean isotope composition of hydrologic components
+components <- data.frame(
+  d18O=c(-28.22,-22.08,-24.68,-14.6,-11.7,-16.22,-8.76),
+  dD=c(-179.88,-163.81,-181.80,-105.7,-84.02,-122.15,-86.44),
+  label=c("Evaporate (dE)","Atmosphere: flux-weighted precipitation",
+          "Atmosphere: mean annual precipitation","Mean annual precipitation",
+          "Evaporation-flux weighted precipitation","Total inflow","Steady-state lake"),
+  type=c("Evaporate","Atmosphere","Atmosphere","Precipitation","Precipitation","Inflow","Lake"))
+p7 <- ggplot() + geom_abline(intercept=10,slope=8,colour="black") +
+  geom_point(data=subset(bl,Subgroup=="Around"),aes(d18O,dD),shape=21,fill="white",
+             colour="black",alpha=.5,size=2) +
+  geom_point(data=components,aes(d18O,dD,shape=label,fill=type),size=5,colour="black") +
+  geom_path(data=components[c(1,7,6),],aes(d18O,dD),linetype="dashed",colour="blue") +
+  scale_shape_discrete(name=NULL) + scale_fill_discrete(name=NULL) +
+  labs(x=expression(delta^{18}*O~("\u2030")),y=expression(delta^{2}*H~("\u2030"))) +
+  theme_bw(base_size=14) + theme(legend.position="right")
+print(p7)
+
+```
